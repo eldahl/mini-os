@@ -1,26 +1,5 @@
 #include <stdint.h>
 
-#define VGA_MEMORY ((uint16_t*)0xB8000)
-#define VGA_COLS   80
-#define VGA_ROWS   25
-
-static uint16_t make_vga_entry(char c, uint8_t color) {
-    return (uint16_t)c | ((uint16_t)color << 8);
-}
-
-static void putc_at(int x, int y, char c, uint8_t color) {
-    volatile uint16_t* vga = VGA_MEMORY;
-    vga[y * VGA_COLS + x] = make_vga_entry(c, color);
-}
-
-static void puts_at(int x, int y, const char* s, uint8_t color) {
-    int i = 0;
-    while (s[i]) {
-        putc_at(x + i, y, s[i], color);
-        i++;
-    }
-}
-
 // ---------- BootInfo struct ----------
 
 struct BootInfo {
@@ -29,49 +8,53 @@ struct BootInfo {
     uint8_t  _pad[3];
     uint32_t kernel_phys;
     uint32_t kernel_sectors;
+    uint32_t fb_addr;
+    uint16_t fb_pitch;
+    uint16_t fb_width;
+    uint16_t fb_height;
+    uint8_t  fb_bpp;
+    uint8_t  fb_type; // 1 = RGB
 };
 
 #define BOOTINFO_ADDR 0x00007E00
 #define BOOTINFO ((struct BootInfo*)BOOTINFO_ADDR)
 
-// very dumb hex print (0–F only)
-static char hex_digit(uint8_t v) {
-    v &= 0xF;
-    return v < 10 ? '0' + v : 'A' + (v - 10);
-}
-
-static void print_hex32_at(int x, int y, uint32_t val, uint8_t color) {
-    for (int i = 0; i < 8; ++i) {
-        uint8_t nibble = (val >> ((7 - i) * 4)) & 0xF;
-        putc_at(x + i, y, hex_digit(nibble), color);
-    }
-}
-
 void kmain(void) {
-    // Clear screen
-    for (int i = 0; i < VGA_COLS * VGA_ROWS; ++i) {
-        ((volatile uint16_t*)VGA_MEMORY)[i] = make_vga_entry(' ', 0x0F);
-    }
-
-    puts_at(0, 0, "Hello from 32-bit kernel!", 0x0F);
-
-    // Read BootInfo
     struct BootInfo* info = BOOTINFO;
 
-    puts_at(0, 2, "BootInfo.magic:      0x", 0x0F);
-    print_hex32_at(22, 2, info->magic, 0x0F);
+    // Basic check to avoid writing somewhere random if VBE failed.
+    if (info->fb_addr == 0 || info->fb_width == 0 || info->fb_height == 0) {
+        for (;;) { __asm__ volatile ("hlt"); }
+    }
 
-    puts_at(0, 3, "BootInfo.boot_drive: 0x", 0x0F);
-    print_hex32_at(22, 3, info->boot_drive, 0x0F);
+    // Draw a simple gradient / bars to prove linear framebuffer is mapped.
+    for (uint32_t y = 0; y < info->fb_height; ++y) {
+        uint8_t* row = (uint8_t*)(uintptr_t)(info->fb_addr + y * info->fb_pitch);
+        for (uint32_t x = 0; x < info->fb_width; ++x) {
+            // Create a gradient across X/Y and a moving bar.
+            uint8_t r = (x * 255) / (info->fb_width ? info->fb_width : 1);
+            uint8_t g = (y * 255) / (info->fb_height ? info->fb_height : 1);
+            uint8_t b = ((x + y) * 255) / ((info->fb_width + info->fb_height) ? (info->fb_width + info->fb_height) : 1);
 
-    puts_at(0, 4, "BootInfo.kernel_phys:0x", 0x0F);
-    print_hex32_at(22, 4, info->kernel_phys, 0x0F);
-
-    puts_at(0, 5, "BootInfo.kernel_secs:0x", 0x0F);
-    print_hex32_at(22, 5, info->kernel_sectors, 0x0F);
+            if (info->fb_bpp == 32) {
+                uint32_t* p32 = (uint32_t*)row;
+                p32[x] = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+            } else if (info->fb_bpp == 24) {
+                uint8_t* p = row + x * 3;
+                p[0] = b;
+                p[1] = g;
+                p[2] = r;
+            } else if (info->fb_bpp == 16) {
+                uint16_t* p16 = (uint16_t*)row;
+                uint16_t rv = ((uint16_t)(r >> 3) << 11) |
+                              ((uint16_t)(g >> 2) << 5)  |
+                              ((uint16_t)(b >> 3));
+                p16[x] = rv;
+            }
+        }
+    }
 
     for (;;) {
         __asm__ volatile ("hlt");
     }
 }
-
