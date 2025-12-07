@@ -1,23 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Clean
-rm -f *.o result.bin
+echo "[1] Build kernel (32-bit ELF)..."
+clang --target=i386-elf -m32 -ffreestanding -fno-pie -nostdlib -c kernel.c -o kernel.o
+nasm -f elf32 kernel_entry.asm -o kernel_entry.o
+ld.lld -m elf_i386 -T kernel.ld kernel_entry.o kernel.o -o kernel.elf
 
-# 1) Compile C -> ELF object (Clang)
-clang --target=i386-elf -m16 -ffreestanding -fno-pie -nostdlib -c main.c -o main.o
+echo "[2] Convert kernel ELF -> flat binary..."
+if command -v llvm-objcopy >/dev/null 2>&1; then
+  llvm-objcopy -O binary kernel.elf kernel.bin
+else
+  objcopy -O binary kernel.elf kernel.bin
+fi
 
-# 2) Assemble bootloader -> ELF object (NASM)
-nasm -f elf32 boot.asm -o boot.o
+echo "[3] Build boot sector..."
+nasm -f bin boot.asm -o boot.bin
 
-# 3) Link with your linker script into a flat binary (using linker.ld)
-ld.lld -m elf_i386 -T linker.ld --oformat binary boot.o main.o -o result.bin
+echo "[4] Create floppy disk image..."
+dd if=/dev/zero of=disk.img bs=512 count=2880 status=none
+dd if=boot.bin   of=disk.img conv=notrunc
+dd if=kernel.bin of=disk.img bs=512 seek=1 conv=notrunc
 
-# 4) Sanity checks
-echo "result.bin size: $(stat -c%s result.bin) bytes"
-printf "tail of binary:\n"
-hexdump -C result.bin | tail -n 6
-
-# 5) Run as a floppy (BIOS will load sector to 0x7C00)
-qemu-system-x86_64 -fda result.bin -nographic -boot order=a -net none
+echo "[5] Run in QEMU..."
+qemu-system-x86_64 \
+	-drive file=disk.img,format=raw,if=floppy \
+	-boot order=a \
+  -net none
 
