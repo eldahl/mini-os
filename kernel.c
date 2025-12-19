@@ -1,76 +1,54 @@
 #include <stdint.h>
-
-// ---------- BootInfo struct ----------
-
-struct BootInfo {
-    uint32_t magic;
-    uint8_t  boot_drive;
-    uint8_t  _pad[3];
-    uint32_t kernel_phys;
-    uint32_t kernel_sectors;
-    uint32_t fb_addr;
-    uint16_t fb_pitch;
-    uint16_t fb_width;
-    uint16_t fb_height;
-    uint8_t  fb_bpp;
-    uint8_t  fb_type; // 1 = RGB
-};
-
-#define BOOTINFO_ADDR 0x00007E00
-#define BOOTINFO ((struct BootInfo*)BOOTINFO_ADDR)
+#include "types.h"
+#include "graphics.h"
+#include "font.h"
 
 void kmain(void) {
     struct BootInfo* info = BOOTINFO;
-
-    // Basic check to avoid writing somewhere random if VBE failed.
-    if (info->fb_addr == 0 || info->fb_width == 0 || info->fb_height == 0) {
-        for (;;) { __asm__ volatile ("hlt"); }
+    
+    // Safety check
+    if (info->fb_addr == 0 || info->fb_width == 0) {
+        for (;;) __asm__ volatile ("hlt");
     }
-
-		int fadeOut = 1;
-		int count = 0;
-
-		for(;;) {
-			// Draw a simple gradient / bars to prove linear framebuffer is mapped.
-			for (uint32_t y = 0; y < info->fb_height; ++y) {
-					uint8_t* row = (uint8_t*)(uintptr_t)(info->fb_addr + y * info->fb_pitch);
-					for (uint32_t x = 0; x < info->fb_width; ++x) {
-							// Create a gradient across X/Y and a moving bar.
-							uint8_t r = (x * (255 - count)) / (info->fb_width ? info->fb_width : 1);
-							uint8_t g = (y * (255 - count)) / (info->fb_height ? info->fb_height : 1);
-							uint8_t b = ((x + y) * (255 - count)) / ((info->fb_width + info->fb_height) ? (info->fb_width + info->fb_height) : 1);
-
-							if (info->fb_bpp == 32) {
-									uint32_t* p32 = (uint32_t*)row;
-									p32[x] = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
-							} else if (info->fb_bpp == 24) {
-									uint8_t* p = row + x * 3;
-									p[0] = r;
-									p[1] = g;
-									p[2] = r;
-							} else if (info->fb_bpp == 16) {
-									uint16_t* p16 = (uint16_t*)row;
-									uint16_t rv = ((uint16_t)(r >> 3) << 11) |
-																((uint16_t)(g >> 2) << 5)  |
-																((uint16_t)(b >> 3));
-									p16[x] = rv;
-							}
-					}
-			}
-			if(count == 255){
-				fadeOut = 0;
-			}
-			else if(count == 0) {
-				fadeOut = 1;
-			}
-
-			if(fadeOut == 1)
-				count++;
-			else
-				count--;
-		}
-
-
+    
+    // Initialize graphics
+    gfx_init();
+    gfx_clear(COLOR_DARK_BG);
+    
+    // Draw title
+    font_draw_string_shadow(20, 20, "MINI-OS GRAPHICS TEST", COLOR_WHITE, COLOR_DARK_GRAY, 3, 2);
+    
+    // Test shapes
+    font_draw_string(20, 80, "Testing basic graphics...", COLOR_GREEN, 1);
+    
+    gfx_fill_rect(20, 110, 100, 60, COLOR_RED);
+    gfx_fill_rect(140, 110, 100, 60, COLOR_GREEN);
+    gfx_fill_rect(260, 110, 100, 60, COLOR_BLUE);
+    
+    gfx_fill_circle(420, 140, 30, COLOR_YELLOW);
+    gfx_fill_circle(500, 140, 30, COLOR_CYAN);
+    gfx_fill_circle(580, 140, 30, COLOR_MAGENTA);
+    
+    // VBE info
+    font_draw_string(20, 200, "VBE Framebuffer Info:", COLOR_WHITE, 2);
+    
+    font_draw_string(20, 240, "Address: ", COLOR_GRAY, 1);
+    font_draw_hex(110, 240, info->fb_addr, COLOR_NEON_GREEN, 1);
+    
+    font_draw_string(20, 260, "Width:   ", COLOR_GRAY, 1);
+    font_draw_int(110, 260, info->fb_width, COLOR_WHITE, 1);
+    
+    font_draw_string(20, 280, "Height:  ", COLOR_GRAY, 1);
+    font_draw_int(110, 280, info->fb_height, COLOR_WHITE, 1);
+    
+    font_draw_string(20, 300, "BPP:     ", COLOR_GRAY, 1);
+    font_draw_int(110, 300, info->fb_bpp, COLOR_WHITE, 1);
+    
+    // Success message
+    font_draw_string_centered(info->fb_width / 2, info->fb_height - 50,
+                              "Graphics Working! Press any key to continue...", COLOR_NEON_GREEN, 2);
+    
+    // Halt
     for (;;) {
         __asm__ volatile ("hlt");
     }
